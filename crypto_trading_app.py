@@ -8,10 +8,6 @@ import requests
 import pandas as pd
 import numpy as np
 
-# Optional ML imports (used only when training is invoked)
-from sklearn.model_selection import TimeSeriesSplit
-from xgboost import XGBClassifier
-
 # ---------- Basic CoinGecko fetch with simple retry ----------
 
 def fetch_market_chart(coin_id: str, vs_currency: str = "usd", days: Any = 90, interval: str = "hourly") -> Dict[str, Any]:
@@ -21,7 +17,7 @@ def fetch_market_chart(coin_id: str, vs_currency: str = "usd", days: Any = 90, i
     Returns dict with 'prices' and 'total_volumes' arrays: [[ms, value], ...]
     """
     base = "https://api.coingecko.com/api/v3"
-    url = f"{base}/coins/{coin_id}/market_chart?vs_currency={vs_currency}&days={days}"
+    url = f"{base}/coins/{coin_id}/market_chart?vs_currency={vs_currency}&days={days}&interval={interval}"
     sess = requests.Session()
     for attempt in range(3):
         r = sess.get(url, timeout=30)
