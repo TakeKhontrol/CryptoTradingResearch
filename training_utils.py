@@ -307,7 +307,21 @@ def train_symbol(symbol: str, cfg: TrainConfig) -> Dict[str, str]:
     es_split = int(len(X_train) * 0.85)
     X_t, X_v = X_train[:es_split], X_train[es_split:]
     y_t, y_v = y_train[:es_split], y_train[es_split:]
-    clf.fit(X_t, y_t, eval_set=[(X_v, y_v)], verbose=False, early_stopping=50)
+    # Compatibility with different xgboost versions
+    try:
+        clf.fit(X_t, y_t, eval_set=[(X_v, y_v)], verbose=False, early_stopping=50)
+    except TypeError:
+        try:
+            from xgboost.callback import EarlyStopping
+            clf.fit(
+                X_t,
+                y_t,
+                eval_set=[(X_v, y_v)],
+                verbose=False,
+                callbacks=[EarlyStopping(rounds=50, save_best=True)],
+            )
+        except TypeError:
+            clf.fit(X_t, y_t, eval_set=[(X_v, y_v)], verbose=False)
 
     y_prob = clf.predict_proba(X_test)[:,1]
     try:
