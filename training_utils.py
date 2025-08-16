@@ -337,7 +337,12 @@ def train_symbol(symbol: str, cfg: TrainConfig) -> Dict[str, str]:
     es_split = int(len(X_train) * 0.85)
     X_t, X_v = X_train[:es_split], X_train[es_split:]
     y_t, y_v = y_train[:es_split], y_train[es_split:]
-    clf.fit(X_t, y_t, eval_set=[(X_v, y_v)], verbose=False, early_stopping_rounds=50)
+    fit_params = dict(eval_set=[(X_v, y_v)], verbose=False)
+    if "early_stopping_rounds" in XGBClassifier.fit.__code__.co_varnames:
+        fit_params["early_stopping_rounds"] = 50
+    else:
+        clf.set_params(early_stopping_rounds=50)
+    clf.fit(X_t, y_t, **fit_params)
 
     y_prob = clf.predict_proba(X_test)[:,1]
     try:
