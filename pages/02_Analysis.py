@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from analysis_utils import (
-    DEFAULT_WATCHLIST, COINGECKO_IDS, scan_market, leaderboard, AnalysisConfig, analyze_symbol, suggested_position_size
+    DEFAULT_WATCHLIST, COINGECKO_IDS, scan_market, leaderboard, AnalysisConfig, analyze_symbol, suggested_position_size,
+    auto_optimize_daytrade
 )
 
 st.set_page_config(page_title="Crypto Trading: Analysis (CoinGecko)", page_icon="📈", layout="wide")
@@ -18,20 +19,40 @@ with st.sidebar:
     lookback_daily = st.slider("Daily lookback (days)", min_value=30, max_value=1460, value=365, step=5)
     rr = st.slider("Risk/Reward target", min_value=1.0, max_value=4.0, value=2.0, step=0.25)
     capital = st.number_input("Capital per trade (USD)", min_value=100.0, value=1000.0, step=50.0)
+    stop_mult = st.slider("Stop buffer (×ATR)", min_value=0.5, max_value=2.5, value=1.0, step=0.1)
 
     if daytrade_interval in ("30m","15m"):
         st.caption("Note: 30m/15m resampled from hourly (CoinGecko granularity).")
+
+    st.markdown("---")
+    st.subheader("Auto-optimize (Day-trade)")
+    sym_for_opt = st.selectbox("Symbol to optimize", options=watchlist or list(COINGECKO_IDS.keys()), index=0)
+    do_opt = st.button("🔧 Suggest Best Params", use_container_width=True)
+    if do_opt and sym_for_opt:
+        with st.spinner(f"Optimizing intraday params for {sym_for_opt}..."):
+            suggestion = auto_optimize_daytrade(sym_for_opt)
+        if suggestion is None:
+            st.warning("Could not find a robust combo (insufficient data). Try increasing lookback.")
+        else:
+            opt_interval, opt_lb, opt_rr, opt_stop, metrics = suggestion
+            st.success(f"Suggested → timeframe={opt_interval}, lookback={opt_lb}d, RR={opt_rr}, Stop×ATR={opt_stop}")
+            st.caption(f"Backtest: trades={metrics['trades']}, win_rate≈{metrics['win_rate']*100:.1f}%, PF≈{metrics['profit_factor']:.2f}, expectancy≈{metrics['expectancy']:.2f}R")
+            # Show how to apply (Streamlit cannot programmatically set widget values easily; user applies manually)
+            st.info("Apply these values to the controls above, then Generate Analysis.")
 
     generate = st.button("🚀 Generate Analysis", type="primary", use_container_width=True)
 
 if generate:
     with st.spinner("Fetching OHLC from CoinGecko and computing indicators..."):
         results = scan_market(
-            watchlist, 
+            watchlist,
             daytrade_interval=daytrade_interval,
             swing_interval=swing_interval,
             lookback_days_intraday=lookback_intra,
-            lookback_days_daily=lookback_daily
+            lookback_days_daily=lookback_daily,
+            risk_reward=rr,
+            capital_per_trade=capital,
+            stop_buffer_atr_mult=stop_mult,
         )
 
     tab1, tab2, tab3 = st.tabs(["Day Trading", "Swing Trading", "Per-Coin Details"])

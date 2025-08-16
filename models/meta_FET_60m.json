@@ -1,0 +1,1 @@
+{"symbol":"FET","interval":"60m","lookback_days":30,"horizon":6,"threshold":0.0,"auc":0.4857902269,"n_samples":699,"model_path":"models\\xgb_model_FET_60m.joblib"}

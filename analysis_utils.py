@@ -37,7 +37,10 @@ COINGECKO_IDS: Dict[str, str] = {
     "INJ": "injective",
     "RNDR": "render-token",
     "FTM": "fantom",
-    "ETC": "ethereum-classic",    "ASI": "artificial-superintelligence-alliance",
+    "ETC": "ethereum-classic",
+    # AI tokens and legacy alias
+    "ASI": "artificial-superintelligence-alliance",
+    "FET": "fetch-ai",
 }
 
 DEFAULT_WATCHLIST = ["BTC","ETH","SOL","XRP","LINK","ADA","AVAX","MATIC","DOGE","UNI"]
@@ -378,11 +381,39 @@ def analyze_symbol(symbol: str, config: AnalysisConfig) -> Optional[AnalysisResu
         notes=notes
     )
 
-def scan_market(symbols: List[str], *, daytrade_interval="60m", swing_interval="1d", lookback_days_intraday=60, lookback_days_daily=365) -> Dict[str, Dict[str, Optional[AnalysisResult]]]:
+def scan_market(
+    symbols: List[str],
+    *,
+    daytrade_interval="60m",
+    swing_interval="1d",
+    lookback_days_intraday=60,
+    lookback_days_daily=365,
+    risk_reward: float = 2.0,
+    capital_per_trade: float = 1000.0,
+    stop_buffer_atr_mult: float = 1.0,
+) -> Dict[str, Dict[str, Optional[AnalysisResult]]]:
     results: Dict[str, Dict[str, Optional[AnalysisResult]]] = {}
     for s in symbols:
-        res_day = analyze_symbol(s, AnalysisConfig(interval=daytrade_interval, lookback_days=lookback_days_intraday))
-        res_swing = analyze_symbol(s, AnalysisConfig(interval=swing_interval, lookback_days=lookback_days_daily))
+        res_day = analyze_symbol(
+            s,
+            AnalysisConfig(
+                interval=daytrade_interval,
+                lookback_days=lookback_days_intraday,
+                risk_reward=risk_reward,
+                capital_per_trade_usd=capital_per_trade,
+                stop_buffer_atr_mult=stop_buffer_atr_mult,
+            ),
+        )
+        res_swing = analyze_symbol(
+            s,
+            AnalysisConfig(
+                interval=swing_interval,
+                lookback_days=lookback_days_daily,
+                risk_reward=risk_reward,
+                capital_per_trade_usd=capital_per_trade,
+                stop_buffer_atr_mult=stop_buffer_atr_mult,
+            ),
+        )
         results[s] = {"day": res_day, "swing": res_swing}
     return results
 
@@ -426,3 +457,132 @@ def suggested_position_size(capital_usd: float, entry: float, stop: float) -> Tu
     risk_capital = 0.01 * capital_usd  # 1% risk
     qty = risk_capital / risk_per_unit
     return qty, risk_capital
+
+# -----------------------------
+# Auto-optimization (Day-trade)
+# -----------------------------
+
+def _trend_label_from_values(last_close: float, e20: float, e50: float, e200: float) -> str:
+    trend_score = 0
+    if last_close > e20: trend_score += 1
+    if e20 > e50: trend_score += 1
+    if e50 > e200: trend_score += 1
+    if last_close > e50: trend_score += 1
+    if last_close > e200: trend_score += 1
+    if trend_score >= 4:
+        return "uptrend"
+    if trend_score <= 1:
+        return "downtrend"
+    return "range"
+
+def _simulate_daytrade_trades(df: pd.DataFrame, rr: float = 2.0, stop_mult: float = 1.0) -> Dict[str, float]:
+    if df is None or df.empty or len(df) < 220:
+        return {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "expectancy": 0.0}
+    close = df["Close"].copy()
+    high = df["High"].copy()
+    low = df["Low"].copy()
+    e20 = ema(close, 20)
+    e50 = ema(close, 50)
+    e200 = ema(close, 200)
+    atr14 = atr(df, 14)
+    roll_low20 = df["Low"].rolling(20).min()
+    roll_high20 = df["High"].rolling(20).max()
+
+    r_results: List[float] = []
+    i = 200
+    n = len(df)
+    while i < n - 2:
+        price = float(close.iloc[i])
+        trend = _trend_label_from_values(price, float(e20.iloc[i]), float(e50.iloc[i]), float(e200.iloc[i]))
+        prev_price = float(close.iloc[i-1])
+        prev_e20 = float(e20.iloc[i-1])
+        cur_e20 = float(e20.iloc[i])
+        cur_atr = float(atr14.iloc[i])
+        taken = False
+        # Long setup in uptrend on EMA20 cross up
+        if trend == "uptrend" and prev_price < prev_e20 and price > cur_e20:
+            entry = price
+            stop = min(float(roll_low20.iloc[i]), entry - stop_mult * cur_atr)
+            risk = max(1e-9, entry - stop)
+            tp = entry + rr * risk
+            j = i + 1
+            while j < n:
+                if float(low.iloc[j]) <= stop:
+                    r_results.append(-1.0)
+                    taken = True
+                    i = j + 1
+                    break
+                if float(high.iloc[j]) >= tp:
+                    r_results.append(rr)
+                    taken = True
+                    i = j + 1
+                    break
+                j += 1
+        # Short setup in downtrend on EMA20 cross down
+        if not taken and trend == "downtrend" and prev_price > prev_e20 and price < cur_e20:
+            entry = price
+            stop = max(float(roll_high20.iloc[i]), entry + stop_mult * cur_atr)
+            risk = max(1e-9, stop - entry)
+            tp = entry - rr * risk
+            j = i + 1
+            while j < n:
+                if float(high.iloc[j]) >= stop:
+                    r_results.append(-1.0)
+                    taken = True
+                    i = j + 1
+                    break
+                if float(low.iloc[j]) <= tp:
+                    r_results.append(rr)
+                    taken = True
+                    i = j + 1
+                    break
+                j += 1
+        if not taken:
+            i += 1
+
+    trades = len(r_results)
+    if trades == 0:
+        return {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "expectancy": 0.0}
+    wins = sum(1 for r in r_results if r > 0)
+    total_win = sum(r for r in r_results if r > 0)
+    total_loss = -sum(r for r in r_results if r < 0)
+    profit_factor = (total_win / total_loss) if total_loss > 0 else float("inf")
+    expectancy = (total_win - total_loss) / trades
+    return {
+        "trades": trades,
+        "win_rate": wins / trades,
+        "profit_factor": profit_factor,
+        "expectancy": expectancy,
+    }
+
+def auto_optimize_daytrade(
+    symbol: str,
+    intervals: List[str] = ["60m", "30m", "15m"],
+    lookbacks: List[int] = [30, 45, 60, 75, 90],
+    rrs: List[float] = [1.5, 2.0, 2.5],
+    stop_mults: List[float] = [1.0, 1.5],
+) -> Optional[Tuple[str, int, float, float, Dict[str, float]]]:
+    best = None
+    best_key = None
+    for interval in intervals:
+        for lb in lookbacks:
+            df = fetch_ohlc(symbol, interval=interval, lookback_days=lb)
+            if df is None or df.empty or len(df) < 220:
+                continue
+            for rr in rrs:
+                for sm in stop_mults:
+                    metrics = _simulate_daytrade_trades(df, rr=rr, stop_mult=sm)
+                    score = (
+                        (metrics["expectancy"] * 2.0)
+                        + (metrics["win_rate"])
+                        + (0.2 if metrics["profit_factor"] > 1.3 else 0.0)
+                        + (min(metrics["trades"], 40) / 200.0)
+                    )
+                    key = (interval, lb, rr, sm)
+                    if best is None or score > best:
+                        best = score
+                        best_key = (interval, lb, rr, sm, metrics)
+    if best_key is None:
+        return None
+    interval, lb, rr, sm, metrics = best_key
+    return interval, int(lb), float(rr), float(sm), metrics
