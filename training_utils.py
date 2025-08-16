@@ -131,7 +131,7 @@ def _fetch_prices_days(coin_id: str, days: str) -> pd.DataFrame:
     return _to_df_from_prices(data["prices"])
 
 @lru_cache(maxsize=256)
-def fetch_ohlc(symbol: str, interval: str = "1d", lookback_days: int = 730) -> pd.DataFrame:
+def fetch_ohlc(symbol: str, interval: str = "1d", lookback_days: int = 365) -> pd.DataFrame:
     """Fetch OHLC using range->max fallback; for ASI, fallback to legacy FET if needed."""
     sym = symbol.upper()
     coin_id = COINGECKO_IDS.get(sym)
@@ -150,9 +150,10 @@ def fetch_ohlc(symbol: str, interval: str = "1d", lookback_days: int = 730) -> p
     # 1) Try exact range
     dfp = _fetch_prices_range(coin_id, start, now)
 
-    # 2) Fallback to days=max (useful when range fails or thin)
+    # 2) Fallback to days param (CoinGecko free tier limits to ~365 days)
     if dfp.empty:
-        dfp = _fetch_prices_days(coin_id, "max")
+        max_days = min(int(lookback_days), 365)
+        dfp = _fetch_prices_days(coin_id, str(max_days))
 
     # 3) Special fallback for ASI -> use FET legacy if still thin
     if (dfp.empty or len(dfp) < 200) and sym == "ASI":
@@ -296,7 +297,7 @@ def auto_suggest_defaults(symbol: str, interval: str = "1d") -> Tuple[int, int, 
 @dataclass
 class TrainConfig:
     interval: str = "1d"
-    lookback_days: int = 730
+    lookback_days: int = 365
     horizon: int = 3
     threshold: float = 0.002
     test_size: float = 0.2
