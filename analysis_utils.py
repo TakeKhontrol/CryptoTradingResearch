@@ -40,7 +40,13 @@ COINGECKO_IDS: Dict[str, str] = {
     "ETC": "ethereum-classic",
     # AI tokens and legacy alias
     "ASI": "artificial-superintelligence-alliance",
-    "FET": "fetch-ai",
+    "FET": "artificial-superintelligence-alliance",
+}
+
+# Alternative CoinGecko IDs to try if the primary returns no data
+ALT_IDS: Dict[str, List[str]] = {
+    "FET": ["artificial-superintelligence-alliance", "fetch-ai"],
+    "ASI": ["artificial-superintelligence-alliance", "fetch-ai"],
 }
 
 DEFAULT_WATCHLIST = ["BTC","ETH","SOL","XRP","LINK","ADA","AVAX","MATIC","DOGE","UNI"]
@@ -186,33 +192,59 @@ def _fetch_ohlc_via_market_chart_range(coin_id: str, start: int, end: int, targe
     else:
         return _resample_prices_to_ohlc(dfp, "60min")
 
+def _fetch_ohlc_via_market_chart_days(coin_id: str, days: int, target_interval: str) -> pd.DataFrame:
+    data = _safe_get(f"/coins/{coin_id}/market_chart", {"vs_currency": "usd", "days": days})
+    if data is None or "prices" not in data:
+        return pd.DataFrame()
+    dfp = _to_df_from_prices(data["prices"])
+    if dfp.empty:
+        return pd.DataFrame()
+    if target_interval == "1d":
+        return _resample_prices_to_ohlc(dfp, "1D")
+    elif target_interval == "60m":
+        return _resample_prices_to_ohlc(dfp, "60min")
+    elif target_interval == "30m":
+        return _resample_prices_to_ohlc(dfp, "30min")
+    elif target_interval == "15m":
+        return _resample_prices_to_ohlc(dfp, "15min")
+    else:
+        return _resample_prices_to_ohlc(dfp, "60min")
+
 @lru_cache(maxsize=256)
 def fetch_ohlc(symbol: str, interval: str = "60m", lookback_days: int = 60) -> pd.DataFrame:
     sym = symbol.upper()
-    coin_id = COINGECKO_IDS.get(sym)
-    if not coin_id:
+    primary_id = COINGECKO_IDS.get(sym)
+    if not primary_id:
         return pd.DataFrame()
 
     interval = _validate_interval(interval)
     days = _days_for_lookback(int(lookback_days))
     intraday = interval in {"60m","30m","15m"}
 
-    # First attempt: OHLC endpoint (hourly if intraday)
-    df = _fetch_ohlc_via_ohlc_endpoint(coin_id, min(days, 90) if intraday else days, intraday=intraday)
+    ids_to_try = ALT_IDS.get(sym, [primary_id])
 
-    # Fallback: market_chart/range (works on free tier; granularity auto)
-    needed_seconds = days * 86400
-    now = int(time.time())
-    start = now - needed_seconds
-    if df.empty or len(df) < 120:  # if not enough bars, try range-based aggregation
-        df = _fetch_ohlc_via_market_chart_range(coin_id, start, now, "1d" if interval == "1d" else interval)
+    for coin_id in ids_to_try:
+        # First attempt: OHLC endpoint (hourly if intraday)
+        df = _fetch_ohlc_via_ohlc_endpoint(coin_id, min(days, 90) if intraday else days, intraday=intraday)
 
-    # Data hygiene
-    if df is None or df.empty:
-        return pd.DataFrame()
-    df = df.sort_index()
-    df = df[~df.index.duplicated(keep="last")]
-    return df.dropna()
+        # Fallback: market_chart/range (works on free tier; granularity auto)
+        needed_seconds = days * 86400
+        now = int(time.time())
+        start = now - needed_seconds
+        if df.empty or len(df) < 120:  # if not enough bars, try range-based aggregation
+            df = _fetch_ohlc_via_market_chart_range(coin_id, start, now, "1d" if interval == "1d" else interval)
+
+        if (df is None or df.empty) and intraday:
+            # Last resort: market_chart with days param
+            df = _fetch_ohlc_via_market_chart_days(coin_id, min(days, 90), interval)
+
+        if df is not None and not df.empty and len(df) >= (120 if intraday else 210):
+            # Data hygiene
+            df = df.sort_index()
+            df = df[~df.index.duplicated(keep="last")]
+            return df.dropna()
+
+    return pd.DataFrame()
 
 # -----------------------------
 # Analysis & Scoring
