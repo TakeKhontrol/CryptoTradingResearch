@@ -1,21 +1,27 @@
 import os
 import time
-import pandas as pd
-import numpy as np
+from datetime import datetime
+from pathlib import Path
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Dict, Tuple, List, Optional
-import requests
-from functools import lru_cache
-from pathlib import Path
 
-# ML
-from sklearn.metrics import classification_report, roc_auc_score
+import pandas as pd
+import numpy as np
+import requests
 import joblib
 
+# ML (optional – only required for model training)
 try:
+    from sklearn.metrics import classification_report, roc_auc_score
+except Exception:  # pragma: no cover - fallback when sklearn missing
+    classification_report = None
+    roc_auc_score = None
+
+try:  # pragma: no cover - xgboost is optional
     from xgboost import XGBClassifier
     _XGB_AVAILABLE = True
-except Exception:
+except Exception:  # pragma: no cover
     _XGB_AVAILABLE = False
 
 # -----------------------------
@@ -53,6 +59,19 @@ COINGECKO_IDS: Dict[str, str] = {
 }
 
 DEFAULT_TRAINLIST: List[str] = []  # No pre-selection; user must choose
+
+# -----------------------------
+# Simple on-disk caching (mirrors former app module)
+# -----------------------------
+
+DATA_DIR = Path("data_cache")
+DATA_DIR.mkdir(exist_ok=True)
+
+def _ohlc_cache_path(symbol: str, interval: str, lookback_days: int, day: Optional[str] = None) -> Path:
+    """Return a cache path unique per symbol/interval/lookback/day."""
+    day = day or datetime.utcnow().strftime("%Y-%m-%d")
+    fname = f"{symbol}_{interval}_{lookback_days}_{day}.csv"
+    return DATA_DIR / fname
 
 # -----------------------------
 # CoinGecko helpers
@@ -118,6 +137,12 @@ def fetch_ohlc(symbol: str, interval: str = "1d", lookback_days: int = 730) -> p
     coin_id = COINGECKO_IDS.get(sym)
     if not coin_id:
         return pd.DataFrame()
+    cache_file = _ohlc_cache_path(sym, interval, lookback_days)
+    if cache_file.exists():
+        try:
+            return pd.read_csv(cache_file, index_col=0, parse_dates=True)
+        except Exception:
+            cache_file.unlink(missing_ok=True)
 
     now = int(time.time())
     start = now - int(lookback_days) * 86400
@@ -147,6 +172,9 @@ def fetch_ohlc(symbol: str, interval: str = "1d", lookback_days: int = 730) -> p
     df = _resample_prices_to_ohlc(dfp, rule)
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
+
+    if not df.empty:
+        df.to_csv(cache_file)
     return df
 
 # -----------------------------
@@ -279,6 +307,8 @@ class TrainConfig:
 def train_symbol(symbol: str, cfg: TrainConfig) -> Dict[str, str]:
     if not _XGB_AVAILABLE:
         return {"status":"error","message":"xgboost is not installed. Please `pip install xgboost`."}
+    if classification_report is None or roc_auc_score is None:
+        return {"status":"error","message":"scikit-learn is required. Please `pip install scikit-learn`."}
 
     df = fetch_ohlc(symbol, interval=cfg.interval, lookback_days=cfg.lookback_days)
     # Require a reasonable amount of bars, but don't be overly strict
