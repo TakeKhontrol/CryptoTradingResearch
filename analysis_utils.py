@@ -37,7 +37,10 @@ COINGECKO_IDS: Dict[str, str] = {
     "INJ": "injective",
     "RNDR": "render-token",
     "FTM": "fantom",
-    "ETC": "ethereum-classic",    "ASI": "artificial-superintelligence-alliance",
+    "ETC": "ethereum-classic",
+    "ASI": "artificial-superintelligence-alliance",
+    # Legacy mapping for Fetch.ai (useful for historical prices)
+    "FET": "fetch-ai",
 }
 
 DEFAULT_WATCHLIST = ["BTC","ETH","SOL","XRP","LINK","ADA","AVAX","MATIC","DOGE","UNI"]
@@ -203,6 +206,16 @@ def fetch_ohlc(symbol: str, interval: str = "60m", lookback_days: int = 60) -> p
     start = now - needed_seconds
     if df.empty or len(df) < 120:  # if not enough bars, try range-based aggregation
         df = _fetch_ohlc_via_market_chart_range(coin_id, start, now, "1d" if interval == "1d" else interval)
+
+    # Special fallback: ASI may need historical Fetch.ai (FET) prices
+    if (df.empty or len(df) < 120) and sym == "ASI":
+        fet_id = COINGECKO_IDS.get("FET")
+        if fet_id:
+            df_fet = _fetch_ohlc_via_ohlc_endpoint(fet_id, min(days, 90) if intraday else days, intraday=intraday)
+            if df_fet.empty or len(df_fet) < 120:
+                df_fet = _fetch_ohlc_via_market_chart_range(fet_id, start, now, "1d" if interval == "1d" else interval)
+            if not df_fet.empty:
+                df = df_fet
 
     # Data hygiene
     if df is None or df.empty:
