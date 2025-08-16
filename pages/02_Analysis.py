@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from analysis_utils import (
     DEFAULT_WATCHLIST, COINGECKO_IDS, scan_market, leaderboard, AnalysisConfig, analyze_symbol, suggested_position_size,
-    auto_optimize_daytrade
+    auto_optimize_daytrade, fetch_ohlc
 )
 
 st.set_page_config(page_title="Crypto Trading: Analysis (CoinGecko)", page_icon="📈", layout="wide")
@@ -62,6 +62,19 @@ if generate:
         df_day = leaderboard(results, mode="day")
         if df_day.empty:
             st.warning("No day-trade results. Increase lookback (<=90d), confirm API access, or try fewer symbols.")
+            # Diagnostics: show number of bars fetched per symbol
+            diag_rows = []
+            for sym in watchlist:
+                try:
+                    df_sym = fetch_ohlc(sym, interval=daytrade_interval, lookback_days=lookback_intra)
+                    bars = len(df_sym) if df_sym is not None else 0
+                except Exception:
+                    bars = 0
+                diag_rows.append({"Symbol": sym, "Bars": int(bars)})
+            if diag_rows:
+                st.caption("Diagnostics (bars fetched per symbol; need ≥120 for intraday):")
+                st.dataframe(pd.DataFrame(diag_rows).sort_values("Bars", ascending=False), use_container_width=True, hide_index=True)
+                st.caption("Tip: If many show 0 bars, you may be rate limited. Set COINGECKO_API_KEY or try fewer symbols.")
         else:
             st.dataframe(df_day, use_container_width=True, hide_index=True)
             csv = df_day.to_csv(index=False).encode()
