@@ -120,7 +120,7 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(window=period).mean()
 
 # -----------------------------
-# Data Fetching - CoinGecko
+# Data Fetching - CoinGecko + Disk Cache
 # -----------------------------
 
 def _validate_interval(interval: str) -> str:
@@ -162,6 +162,25 @@ def _resample_prices_to_ohlc(df_prices: pd.DataFrame, rule: str) -> pd.DataFrame
     ohlc = df_prices["Price"].resample(rule).ohlc()
     ohlc.columns = ["Open","High","Low","Close"]
     return ohlc.dropna()
+
+# Disk cache helpers
+DATA_CACHE_DIR = os.path.join("data_cache", "analysis")
+os.makedirs(DATA_CACHE_DIR, exist_ok=True)
+
+def _cache_file(coin_id: str, interval: str, days: int) -> str:
+    safe = coin_id.replace("/", "-")
+    return os.path.join(DATA_CACHE_DIR, f"ohlc_{safe}_{interval}_{int(days)}.csv")
+
+def _is_cache_fresh(path: str, intraday: bool) -> bool:
+    if not os.path.exists(path):
+        return False
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        return False
+    age_seconds = time.time() - mtime
+    ttl = 6 * 3600 if intraday else 24 * 3600
+    return age_seconds < ttl
 
 def _fetch_ohlc_via_ohlc_endpoint(coin_id: str, days: int, intraday: bool) -> pd.DataFrame:
     # Try OHLC endpoint first; if intraday, request hourly granularity where supported
@@ -211,7 +230,14 @@ def _fetch_ohlc_via_market_chart_days(coin_id: str, days: int, target_interval: 
         return _resample_prices_to_ohlc(dfp, "60min")
 
 @lru_cache(maxsize=256)
-def fetch_ohlc(symbol: str, interval: str = "60m", lookback_days: int = 60) -> pd.DataFrame:
+def fetch_ohlc(
+    symbol: str,
+    interval: str = "60m",
+    lookback_days: int = 60,
+    *,
+    use_cache_only: bool = False,
+    force_refresh: bool = False,
+) -> pd.DataFrame:
     sym = symbol.upper()
     primary_id = COINGECKO_IDS.get(sym)
     if not primary_id:
@@ -224,25 +250,38 @@ def fetch_ohlc(symbol: str, interval: str = "60m", lookback_days: int = 60) -> p
     ids_to_try = ALT_IDS.get(sym, [primary_id])
 
     for coin_id in ids_to_try:
-        # First attempt: OHLC endpoint (hourly if intraday)
-        df = _fetch_ohlc_via_ohlc_endpoint(coin_id, min(days, 90) if intraday else days, intraday=intraday)
+        cache_fp = _cache_file(coin_id, interval, days)
+        if not force_refresh and _is_cache_fresh(cache_fp, intraday):
+            try:
+                df = pd.read_csv(cache_fp, parse_dates=[0], index_col=0)
+                if not df.empty:
+                    return df
+            except Exception:
+                pass
 
-        # Fallback: market_chart/range (works on free tier; granularity auto)
-        needed_seconds = days * 86400
-        now = int(time.time())
-        start = now - needed_seconds
-        if df.empty or len(df) < 120:  # if not enough bars, try range-based aggregation
+        if use_cache_only and not os.path.exists(cache_fp):
+            continue
+
+        # Minimize calls: prefer market_chart?days first (1 call)
+        df = _fetch_ohlc_via_market_chart_days(coin_id, min(days, 90) if intraday else days, interval)
+
+        # Fallback: market_chart/range (second call only if necessary)
+        if (df is None or df.empty or len(df) < (120 if intraday else 210)) and not use_cache_only:
+            needed_seconds = days * 86400
+            now = int(time.time())
+            start = now - needed_seconds
             df = _fetch_ohlc_via_market_chart_range(coin_id, start, now, "1d" if interval == "1d" else interval)
 
-        if (df is None or df.empty) and intraday:
-            # Last resort: market_chart with days param
-            df = _fetch_ohlc_via_market_chart_days(coin_id, min(days, 90), interval)
-
         if df is not None and not df.empty and len(df) >= (120 if intraday else 210):
-            # Data hygiene
             df = df.sort_index()
             df = df[~df.index.duplicated(keep="last")]
-            return df.dropna()
+            df = df.dropna()
+            # Save cache
+            try:
+                df.to_csv(cache_fp)
+            except Exception:
+                pass
+            return df
 
     return pd.DataFrame()
 
@@ -257,6 +296,8 @@ class AnalysisConfig:
     risk_reward: float = 2.0  # suggested RR target
     capital_per_trade_usd: float = 1000.0
     stop_buffer_atr_mult: float = 1.0
+    use_cache_only: bool = False
+    force_refresh: bool = False
 
 @dataclass
 class AnalysisResult:
@@ -331,7 +372,13 @@ def _bias_from_components(trend_label: str, momentum_label: str) -> str:
     return "neutral"
 
 def analyze_symbol(symbol: str, config: AnalysisConfig) -> Optional[AnalysisResult]:
-    df = fetch_ohlc(symbol, interval=config.interval, lookback_days=config.lookback_days)
+    df = fetch_ohlc(
+        symbol,
+        interval=config.interval,
+        lookback_days=config.lookback_days,
+        use_cache_only=config.use_cache_only,
+        force_refresh=config.force_refresh,
+    )
     # Require fewer bars for intraday to be forgiving (hourly >=120, daily >=210)
     min_bars = 120 if config.interval in {"60m","30m","15m"} else 210
     if df.empty or len(df) < min_bars:
@@ -423,6 +470,8 @@ def scan_market(
     risk_reward: float = 2.0,
     capital_per_trade: float = 1000.0,
     stop_buffer_atr_mult: float = 1.0,
+    use_cache_only: bool = False,
+    force_refresh: bool = False,
 ) -> Dict[str, Dict[str, Optional[AnalysisResult]]]:
     results: Dict[str, Dict[str, Optional[AnalysisResult]]] = {}
     for s in symbols:
@@ -434,6 +483,8 @@ def scan_market(
                 risk_reward=risk_reward,
                 capital_per_trade_usd=capital_per_trade,
                 stop_buffer_atr_mult=stop_buffer_atr_mult,
+                use_cache_only=use_cache_only,
+                force_refresh=force_refresh,
             ),
         )
         res_swing = analyze_symbol(
@@ -444,6 +495,8 @@ def scan_market(
                 risk_reward=risk_reward,
                 capital_per_trade_usd=capital_per_trade,
                 stop_buffer_atr_mult=stop_buffer_atr_mult,
+                use_cache_only=use_cache_only,
+                force_refresh=force_refresh,
             ),
         )
         results[s] = {"day": res_day, "swing": res_swing}

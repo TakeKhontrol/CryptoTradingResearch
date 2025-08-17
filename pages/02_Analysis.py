@@ -41,9 +41,15 @@ with st.sidebar:
             st.info("Apply these values to the controls above, then Generate Analysis.")
 
     generate = st.button("🚀 Generate Analysis", type="primary", use_container_width=True)
+    force_refresh = st.checkbox("Force refresh data (bypass session cache)", value=False)
 
 if generate:
     with st.spinner("Fetching OHLC from CoinGecko and computing indicators..."):
+        if force_refresh:
+            try:
+                fetch_ohlc.cache_clear()  # clear lru_cache to avoid stale/empty results
+            except Exception:
+                pass
         results = scan_market(
             watchlist,
             daytrade_interval=daytrade_interval,
