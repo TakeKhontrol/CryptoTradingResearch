@@ -51,6 +51,12 @@ with st.sidebar:
     lookback = st.number_input("Lookback (days)", min_value=30, max_value=1460, value=int(lb), step=10)
     horizon = st.number_input("Bars ahead (horizon)", min_value=1, max_value=30, value=int(h), step=1)
     threshold = st.number_input("Target threshold (return > x)", value=float(th), step=0.001, format="%.3f")
+    st.caption("Profit-aware training options")
+    use_tb = st.checkbox("Use triple-barrier labels", value=True)
+    rr_target = st.slider("RR target (for TP distance)", min_value=1.0, max_value=3.0, value=2.0, step=0.1)
+    stop_mult = st.slider("Stop buffer (×ATR)", min_value=0.5, max_value=2.5, value=1.0, step=0.1)
+    cost_r = st.slider("Per-trade costs (R)", min_value=0.00, max_value=0.20, value=0.05, step=0.01,
+                       help="Express costs as a fraction of the stop size (R). 0.05R ≈ 5% of risk.")
     test_size = st.slider("Test size", min_value=0.1, max_value=0.5, value=0.2, step=0.05)
     model_dir = st.text_input("Model output dir", value="models")
     use_gpu = st.checkbox("Use GPU (if available)", value=False)
@@ -66,15 +72,29 @@ if train_btn:
     if len(syms) == 0:
         st.warning("Select at least one symbol to train.")
     else:
-        cfg = TrainConfig(interval=interval, lookback_days=int(lookback), horizon=int(horizon), threshold=float(threshold),
-                          test_size=float(test_size), model_dir=model_dir, use_gpu=use_gpu)
+        cfg = TrainConfig(
+            interval=interval,
+            lookback_days=int(lookback),
+            horizon=int(horizon),
+            threshold=float(threshold),
+            test_size=float(test_size),
+            model_dir=model_dir,
+            use_gpu=use_gpu,
+            use_triple_barrier=use_tb,
+            rr_target=float(rr_target),
+            stop_atr_mult=float(stop_mult),
+            cost_r=float(cost_r),
+        )
         results = []
         for s in syms:
             with st.spinner(f"Training {s} with XGBoost ..."):
                 res = train_symbol(s, cfg)
                 results.append({"Symbol": s, **{k:v for k,v in res.items() if k!='report'}})
                 if res.get("status") == "ok":
-                    st.success(f"{s}: AUC={res['auc']} | Saved → {res['model_path']}")
+                    thr_txt = res.get("best_threshold")
+                    ts = res.get("thr_stats", {})
+                    stats_str = f" | thr={thr_txt} | trades={ts.get('trades',0)} | win%={(ts.get('win_rate',0.0)*100):.1f}% | expR={ts.get('expectancy',0.0):.2f} | PF={ts.get('profit_factor',0.0):.2f}"
+                    st.success(f"{s}: AUC={res['auc']}{stats_str} | Saved → {res['model_path']}")
                 else:
                     st.warning(f"{s}: {res.get('message','Unknown error')}")
         st.subheader("Training Summary")
