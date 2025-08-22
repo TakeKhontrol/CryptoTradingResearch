@@ -150,6 +150,7 @@ else:
         st.write("Data cache directory not found")
     
     st.info("Choose symbols in the sidebar and click **Train Selected** to train models with advanced settings.")
+    st.caption("Tip: Use the Export page to build labeled datasets (CSV/JSONL) for your external bot.")
     st.caption("Data: CoinGecko range endpoint with max/legacy fallbacks → aggregated to 1d or 60m.")
 
 st.caption("The app fetches once per day per asset. Training uses cached data only, so it stays within free-API limits.")

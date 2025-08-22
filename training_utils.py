@@ -50,6 +50,22 @@ COINGECKO_IDS: Dict[str, str] = {
     "ASI": "artificial-superintelligence-alliance",
     # Optional legacy mapping if needed:
     "FET": "fetch-ai",
+    # Meme coins
+    "PEPE": "pepe",
+    "SHIB": "shiba-inu",
+    "FLOKI": "floki",
+    "BONK": "bonk",
+    "WIF": "dogwifcoin",
+    "BABYDOGE": "baby-doge-coin",
+    "BRETT": "based-brett",
+    "BOME": "book-of-meme",
+    "MEW": "cat-in-a-dogs-world",
+    "DOG": "dog-go-to-the-moon",
+    "MOG": "mog-coin",
+    "TURBO": "turbo",
+    "LADYS": "milady-meme-coin",
+    "POPCAT": "popcat",
+    "PONKE": "ponke",
 }
 
 DEFAULT_TRAINLIST: List[str] = []  # No pre-selection; user must choose

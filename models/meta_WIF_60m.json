@@ -1,0 +1,1 @@
+{"symbol":"WIF","interval":"60m","lookback_days":60,"horizon":3,"threshold":0.001,"auc":0.5900584795,"best_threshold":0.4,"thr_trades":51,"thr_win_rate":0.4705882353,"thr_expectancy":0.3617647059,"thr_profit_factor":1.7777777778,"n_samples":870,"model_path":"models\\xgb_model_WIF_60m.joblib"}

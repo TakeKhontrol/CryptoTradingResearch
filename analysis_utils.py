@@ -41,6 +41,22 @@ COINGECKO_IDS: Dict[str, str] = {
     # AI tokens and legacy alias
     "ASI": "artificial-superintelligence-alliance",
     "FET": "artificial-superintelligence-alliance",
+    # Meme coins
+    "PEPE": "pepe",
+    "SHIB": "shiba-inu",
+    "FLOKI": "floki",
+    "BONK": "bonk",
+    "WIF": "dogwifcoin",
+    "BABYDOGE": "baby-doge-coin",
+    "BRETT": "based-brett",
+    "BOME": "book-of-meme",
+    "MEW": "cat-in-a-dogs-world",
+    "DOG": "dog-go-to-the-moon",
+    "MOG": "mog-coin",
+    "TURBO": "turbo",
+    "LADYS": "milady-meme-coin",
+    "POPCAT": "popcat",
+    "PONKE": "ponke",
 }
 
 # Alternative CoinGecko IDs to try if the primary returns no data
